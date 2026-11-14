@@ -30,7 +30,7 @@
 | **QWRT 16MB 网络缓冲区与低抖动调优** | ⚠️ 内核默认 2MB 缓冲，`netdev_max_backlog=1000`，`netdev_budget=300` | ⚠️ 缺乏系统级缓冲调优，BT/多任务并发时交换芯片 CDM 队列易丢包 | **统一对齐 16MB (`16777216`) TCP/UDP 核心与套接字缓冲区**，`netdev_max_backlog=16384`，`netdev_budget=600`，`dev_weight=128`，移植 `vm.percpu_pagelist_high_fraction=128` 内存防碎片，网卡队列扩容至 5000 | **彻底消除多核并发内存分配延迟与 CPU CDM1 交换队列突发溢出丢包**，保障 4K/8K 组播与万兆高通量零卡顿 |
 | **局域网广播免连接跟踪 (NOTRACK)** | ❌ UPnP SSDP 与 Windows WSD 广播全部进入 conntrack 状态表 | ❌ 未做旁路，局域网多设备时 conntrack 表与交换芯片队列严重膨胀 | **预置 SSDP (`239.255.255.250:1900`) 与 WSD (`3702`) 全链路 `NOTRACK` 规则**（覆盖 IPv4 与 IPv6） | **阻断局域网广播风暴污染连接跟踪表**，降低 CPU 查表开销并保护交换芯片硬件队列 |
 | **开箱即用 br-iptv 异 VLAN + rtp2httpd 双栈** | ❌ 无预置网桥与 IPTV 代理，需用户自行抓包建桥、配置 igmp-proxy | ⚠️ 常见为旧版单栈 udpxy，易引发二层组播环路反射或端口占用 | **开箱预置异 VLAN 隔离网桥 `br-iptv`（`isolate='1'` + `learning='0'`）**，集成 `rtp2httpd`（纯端口 4022 双栈监听、4 Worker 多核并发、16384 零拷贝池），预置 `/www/iptv.m3u` 与现代 Web 播放器 | **零门槛即插即用**，全屋电视盒子、手机、电脑免装复杂软件网页秒开，杜绝二层环路反射 |
-| **实时音视频保序与防断流策略** | ⚠️ 默认可能盲目推荐开启 Flowtable 流卸载 | ⚠️ 盲目开启流卸载与 `packet_steering`，忽视实测劣化 | **实测验证保持关闭 `flow_offloading`、`flow_offloading_hw` 与 `packet_steering` 并停用相关服务** | **根除 `nf_flowtable_udp_timeout=30s` 微信视频/VoIP 周期性断流乱序**；防止接口重载冲刷 `napi/phy0-0` Wi-Fi 4核绑核，避免 5G Wi-Fi 吞吐腰斩 |
+| **硬件流卸载与网桥硬件加速 (PPE)** | ⚠️ 常见固件缺少网桥流表补丁，AP 模式下跨接口转发全走 CPU 软桥 | ⚠️ 默认可能禁用流卸载导致有线/无线桥接吞吐受限 | **集成 `001-add-bridge-flowtable-support.patch`，默认开启 `flow_offloading='1'` 与 `flow_offloading_hw='1'`** | **完美支持 AP 模式网桥硬件直转**，Airoha AN7581 PPE L2/L3 硬件流表全速卸载，同时停用 `packet_steering` 保障 Wi-Fi 4 核绑定不受冲刷 |
 | **第一性原理纯净加解密流水线** | ⚠️ 保留 SafeXcel / EIP-93 协处理器驱动，诱发 DMA 性能倒挂 | ⚠️ 盲目保留硬件加密驱动，导致 Crypto API 优先级霸凌与 SoftIRQ 锁争用 | **遵循 ImmortalWrt 官方最新实践 (`da63f7d`)，彻底剔除 `kmod-crypto-hw-eip93` 负优化**，释放 4 核 1.2GHz ARMv8 NEON 原生向量计算 | **小包 DMA 刷脏与硬中断抢占彻底归零**；WireGuard (ChaCha20-Poly1305) 与 Sing-Box 纯 Go-assembly NEON 直算，延迟更低、吞吐更稳 |
 | **Sing-Box 原生 NFQUEUE 透明重定向** | ❌ 缺失 `kmod-nft-queue` 等内核驱动，开启 `auto_redirect: true` 必报 `-EINVAL` 崩溃 | ⚠️ 依赖脆弱复杂的自定义 nftables 脚本重定向，易与系统规则冲突 | **内核原生集成 Netfilter NFQUEUE 驱动，集成最新 `sing-box 1.15.0-alpha.13` 核心** 与 Momo 纯核心模式 (`core_only='1'`)，支持 `endpoints[].on_demand` | **原生 TUN 模式零拷贝透明网关重定向**，分流与直连完全遵循用户订阅规则，告别规则冲突 |
 | **CI/CD 构建流水线现代化** | ⚠️ 基础单任务构建，无编译器指纹匹配，无高级增量缓存 | ⚠️ 依赖易超时，编译时长动辄 2~4 小时，网络波动易使工作流夭折 | **吸收 1018ji/build-ponwrt-daily 精华**：Ubuntu 24.04 + Node 24，`CCACHE_COMPILERCHECK` 锁定指纹，5GB 增量编译缓存与 DL 依赖池复用，多镜像源自动测速回退，集成 yq | **增量构建时长大幅缩短至 20~35 分钟**，编译成功率稳定在 99% 以上，多源探活彻底告别 APT 超时 |
@@ -179,8 +179,8 @@
   移植 QWRT 核心参数 `vm.percpu_pagelist_high_fraction = 128`，深度优化单核 page 列表阈值，彻底杜绝 4 核并发高吞吐下的物理内存碎片与分配延迟。
 * **SSDP / WSD NOTRACK 免连接跟踪**：
   预置 SSDP (`239.255.255.250:1900`) 与 Windows WSD (`3702`) 全链路 `NOTRACK` 规则，广播包彻底绕过 conntrack 表与交换芯片队列，避免连接跟踪表被广播风暴撑爆。
-* **实测验证保持关闭 Flowtable 与 Packet Steering**：
-  保持 `flow_offloading='0'`、`flow_offloading_hw='0'` 与 `packet_steering='0'`，并直接停用 `/etc/init.d/packet_steering` 服务。一方面根除 `nf_flowtable_udp_timeout = 30s` 造成的微信视频/VoIP 实时长连接断流与 UDP 乱序；另一方面防止接口重载冲刷 Wi-Fi 4 核绑核，避免 5G 下行跌落至 `559–673 Mbps`。
+* **硬件流卸载 (PPE) 与网桥加速**：
+  默认开启 `flow_offloading='1'` 与 `flow_offloading_hw='1'`，配合 `001-add-bridge-flowtable-support.patch` 完美支持 AP 模式二层网桥硬件直转加速与路由三层转发；同时保持 `packet_steering='0'` 并停用 `/etc/init.d/packet_steering`，避免接口重载冲刷 Wi-Fi 4 核绑核。
 * **第一性原理纯净加解密流水线**：
   遵循 ImmortalWrt 官方最新实践 (`da63f7d`)，彻底剔除 `kmod-crypto-hw-eip93` 协处理器负优化，消除小包 DMA 刷脏与硬中断颠簸；WireGuard (ChaCha20-Poly1305) 与 Sing-Box 纯 Go-assembly NEON 直算，延迟更低、吞吐更稳。
 
