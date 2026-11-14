@@ -87,37 +87,24 @@ EOF
 fi
 
 # 2. 预置 rtp2httpd 高性能组播/RTSP/FCC 代理参数 (接管 port 4022，绑定 br-iptv，兼容 /www/iptv.m3u 与 udpxy 路径格式)
-# 注意：listen 使用纯端口号 '4022' 以同时监听 IPv4/IPv6，并避免 LuCI 状态/播放器按钮跳转到 http://0.0.0.0:4022
+# 注意：使用 instance 结构与纯端口号 '4022' 监听 IPv4/IPv6，确保开机自启并修复 LuCI 状态/播放器按钮跳转
 if [ -f /etc/config/rtp2httpd ]; then
-    if uci -q get rtp2httpd.@rtp2httpd[0] >/dev/null; then
-        uci -q batch <<EOF
-set rtp2httpd.@rtp2httpd[0].disabled='0'
-set rtp2httpd.@rtp2httpd[0].respawn='1'
-del rtp2httpd.@rtp2httpd[0].listen
-add_list rtp2httpd.@rtp2httpd[0].listen='4022'
-set rtp2httpd.@rtp2httpd[0].upstream_interface='br-iptv'
-set rtp2httpd.@rtp2httpd[0].workers='4'
-set rtp2httpd.@rtp2httpd[0].maxclients='20'
-set rtp2httpd.@rtp2httpd[0].buffer_pool_max_size='16384'
-set rtp2httpd.@rtp2httpd[0].udp_rcvbuf_size='2097152'
-set rtp2httpd.@rtp2httpd[0].external_m3u='file:///www/iptv.m3u'
+    uci -q delete rtp2httpd.@rtp2httpd[0]
+    uci -q delete rtp2httpd.@instance[0]
+    uci -q batch << 'EOF'
+set rtp2httpd.main=instance
+set rtp2httpd.main.enabled='1'
+del rtp2httpd.main.listen
+add_list rtp2httpd.main.listen='4022'
+set rtp2httpd.main.upstream_interface='br-iptv'
+set rtp2httpd.main.noudpxy='0'
+set rtp2httpd.main.workers='4'
+set rtp2httpd.main.maxclients='20'
+set rtp2httpd.main.buffer_pool_max_size='16384'
+set rtp2httpd.main.udp_rcvbuf_size='2097152'
+set rtp2httpd.main.external_m3u='file:///www/iptv.m3u'
 commit rtp2httpd
 EOF
-    elif uci -q get rtp2httpd.@instance[0] >/dev/null; then
-        uci -q batch <<EOF
-set rtp2httpd.@instance[0].enabled='1'
-del rtp2httpd.@instance[0].listen
-add_list rtp2httpd.@instance[0].listen='4022'
-set rtp2httpd.@instance[0].upstream_interface='br-iptv'
-set rtp2httpd.@instance[0].noudpxy='0'
-set rtp2httpd.@instance[0].workers='4'
-set rtp2httpd.@instance[0].maxclients='20'
-set rtp2httpd.@instance[0].buffer_pool_max_size='16384'
-set rtp2httpd.@instance[0].udp_rcvbuf_size='2097152'
-set rtp2httpd.@instance[0].external_m3u='file:///www/iptv.m3u'
-commit rtp2httpd
-EOF
-    fi
 fi
 
 if [ -f /etc/config/msd_lite ]; then
@@ -138,7 +125,32 @@ if [ -f /etc/init.d/sing-box ]; then
 fi
 rm -f /etc/rc.d/S*sing-box 2>/dev/null
 
-# 4. 预置 momo 纯核心模式（分流与旁路规则完全遵循 sing-box 订阅与原生 auto_redirect）、128MiB 健康堆内存上限（适配 512MB RAM）、定时重启与日志自动清理
+# 3.1 预置 Firewall4 对 Momo (tun0) 的放行与转发表（彻底杜绝 DNS 劫持丢包与转发拒绝，确保直连与内网分流无缝打通）
+if [ -z "$(uci -q get firewall.momo)" ]; then
+    uci -q batch << 'EOF'
+set firewall.momo=zone
+set firewall.momo.name='momo'
+set firewall.momo.input='ACCEPT'
+set firewall.momo.output='ACCEPT'
+set firewall.momo.forward='ACCEPT'
+add_list firewall.momo.device='tun0'
+
+set firewall.lan_momo=forwarding
+set firewall.lan_momo.src='lan'
+set firewall.lan_momo.dest='momo'
+
+set firewall.momo_lan=forwarding
+set firewall.momo_lan.src='momo'
+set firewall.momo_lan.dest='lan'
+
+set firewall.momo_wan=forwarding
+set firewall.momo_wan.src='momo'
+set firewall.momo_wan.dest='wan'
+commit firewall
+EOF
+fi
+
+# 4. 预置 momo 纯核心模式（分流与旁路规则完全遵循 sing-box 订阅与原生 auto_redirect）、默认优先远程配置 (prefer='remote')、128MiB 健康堆内存上限（适配 512MB RAM）、定时重启与日志自动清理
 if [ -f /etc/config/momo ]; then
     uci -q batch <<EOF
 set momo.config.core_only='1'
@@ -151,6 +163,10 @@ set momo.config.scheduled_restart='0'
 set momo.config.scheduled_restart_cron='0 4 * * *'
 commit momo
 EOF
+    for sub in $(uci -q show momo | grep '=subscription' | cut -d. -f2 | cut -d= -f1); do
+        uci -q set momo.${sub}.prefer='remote'
+    done
+    uci -q commit momo
 fi
 if [ -f /etc/init.d/momo ]; then
     /etc/init.d/momo enable 2>/dev/null || true
