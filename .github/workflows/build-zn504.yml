@@ -203,7 +203,7 @@ jobs:
               - 预置 `SingleSKU` 与 `mt7916-sku.dat` 射频功率校准表
               - **Wi-Fi 四核无线线程绑核与以太网硬中断亲和性** (`/usr/sbin/pin-wifi-cpus.sh` + `/etc/hotplug.d/net/99-wifi-affinity`)：`mt76-tx*` 独占 `CPU3`，`napi/phy0-0` 均衡打散至 `CPU0/1/2`，有线硬中断绑定 `IRQ 17->CPU1`、`IRQ 21->CPU2`（实测 5G Wi-Fi iPerf3 稳定 **1144 Mbps 下行 / 1200 Mbps 上行**）
             * **核心网络与实时音视频保序优化**：
-              - 默认开启 Firewall4 软件与硬件 PPE 流卸载（`flow_offloading='1'` / `flow_offloading_hw='1'`），配合 `001-add-bridge-flowtable-support.patch` 完美支持 AP 模式网桥硬件直转与三层路由加速；保持停用多核 `packet_steering='0'` 服务以保护 Wi-Fi 4 核绑定亲和性不受冲刷
+              - 默认开启 Firewall4 软件流卸载（`flow_offloading='1'`）并保持关闭硬件 PPE 流卸载（`flow_offloading_hw='0'`），利用内核 flowtable 加速网桥与路由三层转发，同时规避 AN7581 PPE 驱动在 IPv6 PPPoE 下引发的阿里 CDN / 夸克网盘丢包卡顿；保持停用多核 `packet_steering='0'` 服务以保护 Wi-Fi 4 核绑定亲和性不受冲刷
               - 启用 Momo 纯核心模式（`core_only='1'`）搭配内核 NFQUEUE，完整遵循用户 `sing-box` 订阅规则及原生 `auto_redirect` + `bypass` 零拷贝直连
               - 网桥放行 LLDP (0x4000)，杜绝下挂 AP 组播心跳导致网桥丢包统计异常
               - 移植 QWRT 内存防碎片参数 (`vm.percpu_pagelist_high_fraction = 128`)，提升高通量多核并发页面分配效率
